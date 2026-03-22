@@ -1,0 +1,39 @@
+# ==============================================================================
+# Kubernetes The Hard Way - Multi-Cloud
+# .gitignore
+# ==============================================================================
+
+# Fichiers générés localement (Certificats et Kubeconfigs)
+*.pem
+*.csr
+*.kubeconfig
+encryption-config.yaml
+machines.txt
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup
+*.tfvars
+!*.tfvars.example
+
+# Inventaires générés
+inventories/**/inventory.env
+!inventories/**/lab.env.example
+
+# Fichiers de preuves (Evidence)
+# On ignore tout sauf le README.md et les dossiers
+evidence/*
+!evidence/README.md
+!evidence/gcp/
+!evidence/aws/
+!evidence/azure/
+!evidence/ibmcloud/
+!evidence/onprem/
+# On permet de commiter les logs si on le souhaite explicitement
+# !evidence/**/*.log
+
+# Système d'exploitation
+.DS_Store
+Thumbs.db
