@@ -1,27 +1,45 @@
+# docs/lld/ibmcloud.md
+
 # Low Level Design (LLD) Provider : IBM Cloud
 
-**Version :** 1.0.0
-**Auteur :** Zidane Djamal, Architecte technique senior
+**Version :** 1.1.0  
+**Auteur :** Zidane Djamal  
+**Rôle :** Architecte technique senior
 
 ---
 
 ## 1. Présentation du Provider
 
-IBM Cloud est un fournisseur Cloud qui se distingue par son positionnement sur les charges de travail d'entreprise critiques, son offre OpenShift managée (ROKS), et sa présence forte dans les secteurs réglementés (finance, santé, secteur public). Dans le cadre de ce projet, IBM Cloud est utilisé pour démontrer le déploiement de Kubernetes sur des Virtual Servers au sein d'un VPC de deuxième génération (VPC Gen2).
+IBM Cloud constitue un provider important du dépôt `kubernetes-the-hard-way-multicloud`.
 
-L'infrastructure sera provisionnée via Terraform en utilisant le provider `ibm`. L'ensemble des ressources sera créé dans un VPC dédié, au sein d'une seule région et d'une seule zone de disponibilité.
+Son intérêt dans cette architecture multi-cloud est double :
+
+- représenter un cas d’usage orienté charges d’entreprise et VPC Gen2 ;
+- démontrer l’adaptation du socle Kubernetes « hard way » à un environnement IBM Cloud basé sur VPC, Virtual Server Instances, Floating IPs et routes VPC.
+
+Dans cette architecture, l’overlay IBM Cloud a une responsabilité claire :
+
+- provisionner les ressources IaaS minimales ;
+- créer le réseau, les routes et les interfaces nécessaires ;
+- créer les instances supportant le cluster ;
+- générer `inventories/ibmcloud/inventory.env` lorsque le provider est exécuté avec succès.
+
+Le provider IBM Cloud ne déploie pas Kubernetes lui-même. Il prépare l’environnement d’exécution du socle.
 
 ---
 
 ## 2. Hypothèses Spécifiques
 
-- L'utilisateur dispose d'un compte IBM Cloud avec un abonnement Pay-As-You-Go ou Subscription (les comptes Lite ne permettent pas de créer des VPC).
-- L'IBM Cloud CLI (`ibmcloud`) est installée et configurée localement (`ibmcloud login`).
-- Le plugin VPC Infrastructure est installé : `ibmcloud plugin install vpc-infrastructure`.
-- Le déploiement cible une seule zone (ex: `eu-de-1` dans la région `eu-de` / Francfort).
-- Les instances utilisent l'image `ibm-ubuntu-22-04-4-minimal-amd64-1` (Ubuntu 22.04 LTS).
-- L'accès SSH est géré via une SSH Key enregistrée dans IBM Cloud.
-- Le quota par défaut du compte est suffisant pour 4 instances `bx2-2x8`.
+- L’utilisateur dispose d’un compte IBM Cloud permettant la création de ressources VPC Gen2.
+- Le CLI `ibmcloud` est installé et authentifié localement.
+- Le plugin VPC Infrastructure est disponible côté opérateur lorsque nécessaire.
+- Le déploiement cible une seule région et une seule zone pour la V1, par défaut `eu-de` / `eu-de-1`.
+- Les instances utilisent l’image `ibm-ubuntu-22-04-4-minimal-amd64-1`.
+- L’accès SSH repose sur une clé SSH déjà enregistrée dans IBM Cloud et référencée par son nom via `ssh_key_name`.
+- Le dimensionnement exact dépend du code Terraform réel :
+  - `jumpbox` est définie explicitement en `cx2-2x4` ;
+  - `server`, `node-0` et `node-1` utilisent `var.profile` avec une valeur par défaut `bx2-2x8`.
+- Le provider IBM Cloud est présent structurellement et techniquement exploitable en V1, avec génération d’un `inventory.env` visible dans le code Terraform.
 
 ---
 
@@ -33,15 +51,16 @@ L'infrastructure sera provisionnée via Terraform en utilisant le provider `ibm`
 | :--- | :--- | :--- |
 | **VPC** | `k8s-thw-vpc` | Virtual Private Cloud dédié |
 | **Subnet** | `k8s-thw-subnet` | Sous-réseau unique `10.240.0.0/24` dans la zone cible |
-| **Public Gateway** | `k8s-thw-pgw` | Passerelle publique pour l'accès Internet sortant |
-| **Security Group** | `k8s-thw-sg` | Groupe de sécurité pour les instances |
-| **Floating IP** | `k8s-thw-<hostname>-fip` | IP flottante publique par instance |
+| **Public Gateway** | `k8s-thw-pgw` | Passerelle publique pour l’accès sortant |
+| **Security Group** | `k8s-thw-sg` | Groupe de sécurité des instances |
+| **Floating IP** | `k8s-thw-<hostname>-fip` | IP publique flottante par instance |
+| **VPC Custom Route** | `route-node-0` / `route-node-1` | Routes statiques pour les Pod CIDRs |
 
 ### 3.2. Plan d'Adressage
 
 | Bloc CIDR | Usage |
 | :--- | :--- |
-| `10.240.0.0/24` | Subnet infrastructure (Virtual Servers) |
+| `10.240.0.0/24` | Réseau infrastructure (subnet) |
 | `10.200.0.0/16` | Pod CIDR global |
 | `10.200.0.0/24` | Pod CIDR node-0 |
 | `10.200.1.0/24` | Pod CIDR node-1 |
@@ -49,14 +68,21 @@ L'infrastructure sera provisionnée via Terraform en utilisant le provider `ibm`
 
 ### 3.3. Routes pour le Pod CIDR
 
-IBM Cloud VPC supporte les routes personnalisées (VPC Routing Tables). Des routes doivent être créées pour acheminer le trafic des pods entre les workers :
+IBM Cloud VPC permet la création de routes personnalisées dans la routing table du VPC :
 
 | Route | Destination | Next Hop |
 | :--- | :--- | :--- |
-| `route-node-0-pods` | `10.200.0.0/24` | `10.240.0.20` (node-0) |
-| `route-node-1-pods` | `10.200.1.0/24` | `10.240.0.21` (node-1) |
+| `route-node-0` | `10.200.0.0/24` | `10.240.0.20` |
+| `route-node-1` | `10.200.1.0/24` | `10.240.0.21` |
 
-**Important :** Le paramètre `allow_ip_spoofing = true` doit être activé sur les interfaces réseau des workers pour permettre le forwarding de paquets avec des IP sources différentes de l'IP de l'interface.
+### 3.4. Point d’Attention Réseau
+
+Le routage Pod-to-Pod dépend de deux éléments visibles dans l’implémentation IBM Cloud :
+
+- `allow_ip_spoofing = true` sur les interfaces réseau des workers ;
+- les routes VPC pointant vers les IP privées des workers.
+
+Sans ces deux mécanismes, le trafic inter-pods entre nœuds ne fonctionne pas correctement.
 
 ---
 
@@ -64,23 +90,33 @@ IBM Cloud VPC supporte les routes personnalisées (VPC Routing Tables). Des rout
 
 ### 4.1. Instances
 
-| Hostname | Profil | vCPU | RAM | Disque | IP Privée | IP Publique |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| `jumpbox` | `bx2-2x8` | 2 | 8 Go | 100 Go | `10.240.0.10` | Floating IP |
-| `server` | `bx2-2x8` | 2 | 8 Go | 100 Go | `10.240.0.11` | Floating IP |
-| `node-0` | `bx2-2x8` | 2 | 8 Go | 100 Go | `10.240.0.20` | Floating IP |
-| `node-1` | `bx2-2x8` | 2 | 8 Go | 100 Go | `10.240.0.21` | Floating IP |
+| Hostname | Profil | Disque | IP Privée | IP Publique |
+| :--- | :--- | :--- | :--- | :--- |
+| `jumpbox` | `cx2-2x4` | profil par défaut de l’instance | `10.240.0.10` | Floating IP |
+| `server` | `var.profile` | profil par défaut de l’instance | `10.240.0.11` | Floating IP |
+| `node-0` | `var.profile` | profil par défaut de l’instance | `10.240.0.20` | Floating IP |
+| `node-1` | `var.profile` | profil par défaut de l’instance | `10.240.0.21` | Floating IP |
 
-### 4.2. Configuration des Instances
+### 4.2. Configuration observée dans le code Terraform
 
-Chaque instance sera créée avec les paramètres suivants :
+Les éléments visibles dans `terraform/ibmcloud/main.tf` sont les suivants :
 
-- **Image :** `ibm-ubuntu-22-04-4-minimal-amd64-1` (Ubuntu 22.04 LTS minimal)
-- **Profile :** `bx2-2x8` (Balanced, 2 vCPU, 8 Go RAM)
-- **Boot volume :** 100 Go, `general-purpose` IOPS tier
-- **SSH Key :** Référence à la clé SSH enregistrée dans IBM Cloud
-- **Primary Network Interface :** IP privée statique, Security Group `k8s-thw-sg`
-- **allow_ip_spoofing :** `true` sur les interfaces des workers
+- image `ibm-ubuntu-22-04-4-minimal-amd64-1` récupérée par data source ;
+- `jumpbox` fixée à `cx2-2x4` ;
+- `server`, `node-0`, `node-1` pilotés par `var.profile` ;
+- clés SSH injectées via référence à `data.ibm_is_ssh_key` ;
+- IP privées statiques définies dans `primary_ip` ;
+- Floating IPs attachées explicitement aux interfaces primaires ;
+- `allow_ip_spoofing = true` sur les workers.
+
+### 4.3. Interprétation d’architecture
+
+Cette implémentation confirme une architecture V1 :
+
+- simple à relire ;
+- explicite sur les ressources IBM Cloud ;
+- cohérente avec un laboratoire mono-zone ;
+- suffisamment structurée pour jouer le rôle d’overlay IBM Cloud du dépôt.
 
 ---
 
@@ -88,17 +124,19 @@ Chaque instance sera créée avec les paramètres suivants :
 
 ### 5.1. Security Group (`k8s-thw-sg`)
 
-**Règles Inbound :**
+Le Security Group visible dans `terraform/ibmcloud/main.tf` est volontairement simple.
+
+**Règles Inbound visibles :**
 
 | Direction | Protocole | Port(s) | Source | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| Inbound | TCP | 22 | `0.0.0.0/0` | Accès SSH |
-| Inbound | TCP | 6443 | `0.0.0.0/0` | API Kubernetes |
+| Inbound | TCP | `22` | `0.0.0.0/0` | Accès SSH |
+| Inbound | TCP | `6443` | `0.0.0.0/0` | API Kubernetes |
 | Inbound | ALL | ALL | `10.240.0.0/24` | Trafic interne cluster |
 | Inbound | ALL | ALL | `10.200.0.0/16` | Trafic Pod CIDR |
-| Inbound | ICMP | Type 8 | `0.0.0.0/0` | Ping (Echo Request) |
+| Inbound | ICMP | type 8 | `0.0.0.0/0` | Ping |
 
-**Règles Outbound :**
+**Règle Outbound visible :**
 
 | Direction | Protocole | Port(s) | Destination | Description |
 | :--- | :--- | :--- | :--- | :--- |
@@ -106,21 +144,42 @@ Chaque instance sera créée avec les paramètres suivants :
 
 ### 5.2. Principes de Sécurité V1
 
-Pour la V1, il n'y a pas de Trusted Profile, pas d'intégration avec IBM Key Protect, pas de Context-Based Restrictions, et pas de Flow Logs. Le périmètre de sécurité repose sur le Security Group et l'authentification SSH par clé.
+Pour la V1, la sécurité reste volontairement simple :
+
+- un Security Group unique ;
+- pas de Trusted Profile visible ;
+- pas d’intégration Key Protect visible ;
+- pas de mécanisme réseau avancé additionnel ;
+- authentification SSH par clé.
+
+### 5.3. Point d’attention documentaire
+
+Le LLD IBM Cloud doit décrire le Security Group réellement visible dans `main.tf`, sans extrapoler vers une cible plus détaillée non implémentée.
 
 ---
 
 ## 6. Accès SSH
 
-L'accès SSH est configuré via une SSH Key enregistrée dans IBM Cloud et référencée lors de la création des instances. La `jumpbox` sert de bastion :
+L’accès SSH repose sur une clé déjà enregistrée dans IBM Cloud et référencée via `ssh_key_name`.
 
-1. L'utilisateur se connecte à la `jumpbox` depuis son poste local :
-   ```bash
-   ssh -i ~/.ssh/id_ed25519 root@<JUMPBOX_FLOATING_IP>
-   ```
-2. Depuis la `jumpbox`, l'utilisateur accède aux autres nœuds via SSH par IP privée.
+### 6.1. Principes
 
-**Note IBM Cloud :** Par défaut, l'utilisateur SSH sur les images Ubuntu IBM Cloud est `root` (et non `ubuntu`). Cela peut être modifié via `cloud-init` si nécessaire.
+- Terraform lit la clé via `data "ibm_is_ssh_key"` ;
+- les instances utilisent cette clé au provisionnement ;
+- l’utilisateur SSH par défaut est `root` selon `variables.tf` et les inventaires visibles ;
+- la jumpbox reste le point d’entrée privilégié pour les opérations du socle.
+
+### 6.2. Accès opératoire
+
+`outputs.tf` fournit une commande SSH de référence vers la jumpbox, construite à partir de :
+
+- `ssh_user` ;
+- `ssh_public_key_path` transformé en chemin de clé privée ;
+- la Floating IP de la jumpbox.
+
+### 6.3. Point d’attention
+
+Le dépôt réel ne montre pas de script séparé de type `02-register-ssh-key.sh`. Le LLD ne doit donc pas présenter cette étape comme un composant outillé du dépôt, même si l’enregistrement de la clé peut être nécessaire côté opérateur.
 
 ---
 
@@ -128,11 +187,13 @@ L'accès SSH est configuré via une SSH Key enregistrée dans IBM Cloud et réf�
 
 ### 7.1. Adresses IP
 
-Les IP privées sont assignées via le paramètre `primary_ipv4_address` dans le bloc `primary_network_interface` de la ressource Terraform `ibm_is_instance`. Les Floating IPs sont des ressources distinctes attachées aux interfaces réseau des instances.
+Les IP privées sont portées par l’interface réseau primaire des instances.
+
+Les IP publiques sont des Floating IPs, ressources distinctes explicitement attachées aux interfaces réseau des instances.
 
 ### 7.2. Résolution DNS
 
-IBM Cloud VPC fournit un résolveur DNS interne. Le fichier `/etc/hosts` de chaque nœud sera enrichi par un script de préparation avec les correspondances hostname-IP.
+IBM Cloud VPC fournit un résolveur DNS interne. Le LLD IBM Cloud ne doit pas affirmer qu’un enrichissement automatique de `/etc/hosts` existe déjà dans le provider si cela n’est pas visible dans les scripts présents. Cette préparation peut relever d’une étape manuelle ou du socle selon le niveau de maturité du dépôt.
 
 ---
 
@@ -142,61 +203,105 @@ IBM Cloud VPC fournit un résolveur DNS interne. Le fichier `/etc/hosts` de chaq
 
 | Variable | Type | Valeur par défaut | Description |
 | :--- | :--- | :--- | :--- |
-| `ibmcloud_api_key` | `string` | — (obligatoire) | Clé API IBM Cloud |
+| `ibmcloud_api_key` | `string` | — | Clé API IBM Cloud |
 | `region` | `string` | `eu-de` | Région IBM Cloud |
-| `zone` | `string` | `eu-de-1` | Zone de disponibilité |
-| `profile` | `string` | `bx2-2x8` | Profil d'instance |
-| `ssh_key_name` | `string` | — (obligatoire) | Nom de la SSH Key enregistrée dans IBM Cloud |
+| `zone` | `string` | `eu-de-1` | Zone IBM Cloud |
+| `profile` | `string` | `bx2-2x8` | Profil de calcul pour `server` et workers |
+| `ssh_key_name` | `string` | — | Nom de la clé SSH enregistrée |
+| `ssh_user` | `string` | `root` | Utilisateur SSH |
+| `ssh_public_key_path` | `string` | `~/.ssh/id_ed25519.pub` | Chemin local vers la clé publique SSH |
+| `pod_cidr` | `string` | `10.200.0.0/16` | Pod CIDR global |
+| `service_cidr` | `string` | `10.32.0.0/24` | Service CIDR |
+| `cluster_dns` | `string` | `10.32.0.10` | IP du DNS cluster |
+
+### 8.2. Variables d’inventaire
+
+Le fichier `inventories/ibmcloud/inventory.env`, lorsqu’il est généré, porte notamment :
+
+- les IP publiques et privées ;
+- les CIDR Kubernetes ;
+- les versions de référence ;
+- les paramètres d’accès SSH.
+
+### 8.3. `lab.env.example` vs `inventory.env`
+
+Le provider IBM Cloud suit la distinction standard du dépôt :
+
+- `inventories/ibmcloud/lab.env.example` : exemple versionné ;
+- `inventories/ibmcloud/inventory.env` : fichier d’exécution généré localement par Terraform quand le provider est exécuté.
 
 ---
 
-## 9. Structure Terraform Prévue
+## 9. Structure Terraform Réelle
 
 ```text
 terraform/ibmcloud/
-├── main.tf                  # Provider IBM, configuration
-├── variables.tf             # Variables d'entrée
-├── outputs.tf               # Sorties (IPs, Floating IPs)
-├── network.tf               # VPC, Subnet, Public Gateway, Security Group, Routes
-├── compute.tf               # Instances (jumpbox, server, node-0, node-1)
-├── floating_ips.tf          # Floating IPs attachées aux instances
-├── inventory.tf             # Génération du fichier inventory.env
-├── templates/
-│   └── inventory.env.tpl    # Template pour l'inventory
-├── terraform.tfvars.example # Exemple de fichier de variables
-└── README.md                # Instructions spécifiques IBM Cloud
+├── inventory.tpl
+├── main.tf
+├── outputs.tf
+├── variables.tf
+└── versions.tf
 ```
+
+### 9.1. Rôle des fichiers
+
+- `main.tf` : VPC, subnet, public gateway, security group, image, clé SSH, instances, floating IPs, routes et génération de l’inventaire ;
+- `variables.tf` : variables d’entrée ;
+- `outputs.tf` : IP publiques et commande SSH ;
+- `versions.tf` : contraintes Terraform et providers ;
+- `inventory.tpl` : template utilisé pour générer `inventories/ibmcloud/inventory.env`.
+
+### 9.2. Point d’attention documentaire
+
+Le dépôt réel ne montre pas, à ce stade :
+
+- `network.tf` ;
+- `compute.tf` ;
+- `floating_ips.tf` ;
+- `inventory.tf` ;
+- `templates/` ;
+- `terraform.tfvars.example`.
+
+Le LLD IBM Cloud doit donc décrire la structure réellement présente, et non une structure cible théorique.
 
 ---
 
-## 10. Structure Scripts Prévue
+## 10. Structure Scripts Réelle
 
 ```text
-scripts/providers/ibmcloud/
-├── 00-validate-prerequisites.sh   # Vérifie ibmcloud cli, terraform, ssh-keygen
-├── 01-provision.sh                # Wrapper autour de terraform apply
-├── 02-register-ssh-key.sh         # Enregistre la clé SSH dans IBM Cloud si nécessaire
-├── 99-cleanup.sh                  # Wrapper autour de terraform destroy
-└── README.md                      # Instructions d'utilisation
+scripts/ibmcloud/
+├── cleanup.sh
+└── provision.sh
 ```
+
+### 10.1. Rôle des scripts provider
+
+Les scripts IBM Cloud sont des wrappers légers autour de Terraform :
+
+- `provision.sh` : exécute le provisioning depuis `terraform/ibmcloud/` ;
+- `cleanup.sh` : exécute la destruction Terraform puis supprime `inventories/ibmcloud/inventory.env`.
+
+### 10.2. Limite actuelle à expliciter
+
+Le script `provision.sh` référence encore un fichier `terraform.tfvars` et mentionne `terraform.tfvars.example`, alors que ce dernier n’est pas visible dans le dépôt actuel. Cet écart doit être documenté comme une dette de stabilisation V1.
+
+### 10.3. Point d’attention
+
+Le dépôt réel ne montre pas de script séparé de type `02-register-ssh-key.sh`. Cette opération peut exister côté opérateur, mais elle ne doit pas être présentée comme une capacité scriptée du dépôt.
 
 ---
 
 ## 11. Exemple d'Inventory
 
 ```bash
-# === Kubernetes The Hard Way - IBM Cloud Inventory ===
-# Provider: IBM Cloud
-# Region: eu-de / Zone: eu-de-1
-
 PROVIDER="ibmcloud"
 REGION="eu-de"
 ZONE="eu-de-1"
 
-JUMPBOX_PUBLIC_IP="161.156.xxx.xxx"
-SERVER_PUBLIC_IP="161.156.xxx.xxx"
-NODE_0_PUBLIC_IP="161.156.xxx.xxx"
-NODE_1_PUBLIC_IP="161.156.xxx.xxx"
+JUMPBOX_PUBLIC_IP="169.x.x.x"
+SERVER_PUBLIC_IP="169.x.x.x"
+NODE_0_PUBLIC_IP="169.x.x.x"
+NODE_1_PUBLIC_IP="169.x.x.x"
 
 JUMPBOX_PRIVATE_IP="10.240.0.10"
 SERVER_PRIVATE_IP="10.240.0.11"
@@ -219,40 +324,71 @@ SSH_USER="root"
 SSH_KEY_PATH="~/.ssh/id_ed25519"
 ```
 
+Cet exemple reste aligné avec :
+
+- `inventory.tpl` ;
+- `inventories/ibmcloud/lab.env.example` ;
+- la baseline technique V1 du dépôt.
+
 ---
 
 ## 12. Flux d'Exécution
 
-1. **Pré-requis :** Vérifier l'installation de `ibmcloud` CLI, `terraform`, et l'authentification IBM Cloud.
-2. **Enregistrement de la clé SSH :** Si ce n'est pas déjà fait, enregistrer la clé publique SSH dans IBM Cloud :
-   ```bash
-   ibmcloud is key-create k8s-thw-key @~/.ssh/id_ed25519.pub
-   ```
-3. **Provisionnement :** Se placer dans `terraform/ibmcloud/`, copier `terraform.tfvars.example` en `terraform.tfvars`, renseigner l'API key et le nom de la SSH key, puis exécuter :
-   ```bash
-   terraform init
-   terraform plan
-   terraform apply
-   ```
-4. **Vérification de l'inventory :** Vérifier que `inventories/ibmcloud/inventory.env` a été correctement généré.
-5. **Connexion à la Jumpbox :** `ssh -i ~/.ssh/id_ed25519 root@<JUMPBOX_FLOATING_IP>`
-6. **Clonage du dépôt sur la Jumpbox :** `git clone https://github.com/zdmooc/kubernetes-the-hard-way-multicloud.git`
-7. **Sourcing de l'inventory :** `source inventories/ibmcloud/inventory.env`
-8. **Exécution séquentielle des scripts Core :** `01-prerequisites.sh` à `11-smoke-tests.sh`
-9. **Collecte des preuves :** Les scripts génèrent automatiquement des fichiers dans `evidence/`.
+Le flux de déploiement IBM Cloud V1 peut être résumé ainsi :
+
+1. **Préparation locale**
+   - vérifier `ibmcloud`, `terraform`, la clé SSH et les prérequis système ;
+   - vérifier l’authentification IBM Cloud et la disponibilité de la clé SSH référencée.
+
+2. **Provisionnement IBM Cloud**
+   - exécuter Terraform dans `terraform/ibmcloud/` ou utiliser `scripts/ibmcloud/provision.sh` ;
+   - fournir les variables nécessaires, notamment `ibmcloud_api_key` et `ssh_key_name`.
+
+3. **Génération de l’inventaire**
+   - vérifier la présence de `inventories/ibmcloud/inventory.env` ;
+   - contrôler son contenu via `scripts/shared/render-inventory.sh` si besoin.
+
+4. **Exécution du socle Kubernetes**
+   - suivre les étapes documentées dans `docs/core/` ;
+   - utiliser les scripts mutualisés de `scripts/shared/` en appui.
+
+5. **Validation**
+   - exécuter les validations décrites dans `docs/core/09-smoke-tests.md` ;
+   - utiliser `scripts/shared/smoke-tests.sh` pour la partie actuellement automatisée.
+
+6. **Conservation des preuves**
+   - stocker les sorties utiles dans `evidence/` selon la discipline opératoire retenue.
+
+### 12.1. Point d’attention
+
+Le flux IBM Cloud ne doit pas être décrit comme une exécution séquentielle d’une suite `01-*` à `11-*` dans `scripts/core/`, car cette structure n’existe pas dans le dépôt réel.
 
 ---
 
 ## 13. Flux de Cleanup
 
-1. **Nettoyage Kubernetes (optionnel) :** Suppression des ressources Kubernetes de test.
-2. **Destruction de l'infrastructure :**
-   ```bash
-   cd terraform/ibmcloud/
-   terraform destroy -auto-approve
-   ```
+Le nettoyage IBM Cloud repose sur le wrapper réel `scripts/ibmcloud/cleanup.sh` ou, à défaut, sur `terraform destroy` exécuté dans `terraform/ibmcloud/`.
 
-**Vérification post-cleanup :** Exécuter `ibmcloud is instances --output json | jq '.[] | select(.name | startswith("k8s-thw"))'` pour confirmer la suppression.
+### 13.1. Séquence visible
+
+Le script réel effectue :
+
+1. un positionnement dans `terraform/ibmcloud/` ;
+2. une demande de confirmation interactive ;
+3. un `terraform destroy -auto-approve` ;
+4. une suppression locale de `inventories/ibmcloud/inventory.env`.
+
+### 13.2. Vérifications recommandées
+
+Après cleanup, il est recommandé de vérifier :
+
+- l’absence d’instances résiduelles ;
+- l’absence de floating IP résiduelle ;
+- l’absence d’inventaire local résiduel.
+
+### 13.3. Interprétation
+
+Ce cleanup est cohérent avec une V1 de laboratoire : simple, explicite, et centré sur le retour à un état propre après expérimentation.
 
 ---
 
@@ -260,33 +396,59 @@ SSH_KEY_PATH="~/.ssh/id_ed25519"
 
 | Risque | Impact | Probabilité | Mitigation |
 | :--- | :--- | :--- | :--- |
-| **Coûts Floating IPs** | Facturation résiduelle | Moyen | Les Floating IPs non attachées sont facturées ; vérifier après destroy |
-| **IP Spoofing désactivé** | Trafic Pod bloqué | Élevé | Automatiser via Terraform (`allow_ip_spoofing = true`) |
-| **Compte Lite insuffisant** | Impossible de créer un VPC | Élevé | Migrer vers un compte Pay-As-You-Go |
-| **Provider Terraform IBM moins mature** | Bugs ou limitations | Moyen | Figer la version du provider et tester régulièrement |
+| Coûts Floating IPs | Facturation résiduelle | Moyen | Vérifier la suppression complète après destroy |
+| IP Spoofing désactivé | Trafic Pod bloqué | Élevé | Vérifier `allow_ip_spoofing = true` sur les workers |
+| Compte insuffisant | Échec du provisionnement | Élevé | Utiliser un compte compatible VPC Gen2 |
+| Provider Terraform IBM moins mature | Bugs ou limitations | Moyen | Figer la version du provider et revalider régulièrement |
+| Inventaire incomplet | Blocage du socle | Moyen | Vérifier `inventory.env` avant bootstrap |
 
 ---
 
 ## 15. Points d'Attention
 
-- **Facturation :** Les instances `bx2-2x8` coûtent environ 0,096 USD/heure chacune. Les Floating IPs sont facturées séparément (environ 0,005 USD/heure chacune).
-- **IP Spoofing :** C'est le point technique le plus critique sur IBM Cloud. Le paramètre `allow_ip_spoofing` doit être activé sur les interfaces réseau des workers. Sans ce paramètre, le trafic inter-pods sera rejeté par le VPC.
-- **SSH User :** L'utilisateur SSH par défaut sur les images Ubuntu IBM Cloud est `root`, contrairement aux autres providers où c'est `ubuntu`. Les scripts Core doivent gérer cette différence via la variable `SSH_USER` de l'inventory.
-- **API Key :** La clé API IBM Cloud est sensible et ne doit jamais être versionnée. Utiliser une variable d'environnement `IC_API_KEY` ou un fichier `terraform.tfvars` non versionné.
+- **Facturation :** Le coût dépend notamment d’une `jumpbox` en `cx2-2x4`, de trois instances pilotées par `profile` (par défaut `bx2-2x8`) et des Floating IPs. Il est important de détruire l’infrastructure après les tests.
+- **IP Spoofing :** C’est le point technique le plus critique sur IBM Cloud. Le paramètre `allow_ip_spoofing` doit être activé sur les interfaces réseau des workers.
+- **SSH User :** L’utilisateur SSH courant de la V1 est `root`, contrairement aux autres providers où `ubuntu` est plus fréquent.
+- **API Key :** La clé API IBM Cloud est sensible et ne doit jamais être versionnée.
 
 ---
 
 ## 16. Limites Connues de la V1
 
-- Déploiement mono-zone (pas de résilience géographique).
-- Pas de Load Balancer IBM Cloud devant l'API Server.
-- Pas d'intégration avec IBM Key Protect pour le chiffrement des secrets etcd.
-- Pas de Trusted Profile pour les instances.
-- Pas de Flow Logs pour l'audit réseau.
-- Les routes VPC pour le Pod CIDR ne sont pas scalables au-delà de quelques nœuds.
-- Le provider Terraform IBM est moins mature que les providers GCP, AWS ou Azure.
+- déploiement mono-zone ;
+- pas de load balancer IBM Cloud devant l’API server ;
+- pas d’intégration avec IBM Key Protect pour le chiffrement etcd ;
+- pas de Trusted Profile visible ;
+- pas de Flow Logs ;
+- routes VPC peu scalables au-delà de quelques nœuds ;
+- provider Terraform IBM moins mature que les providers GCP, AWS ou Azure.
 
 ---
-**Signé :**
-*Zidane Djamal*
-*Architecte technique senior*
+
+## 17. Conclusion
+
+Le provider IBM Cloud apporte une valeur forte au dépôt multi-cloud, car il rend visible une implémentation spécifique basée sur :
+
+- VPC Gen2 ;
+- Public Gateway ;
+- Floating IPs ;
+- data source SSH key ;
+- `allow_ip_spoofing` ;
+- routes VPC personnalisées.
+
+Le rôle du LLD IBM Cloud est donc double :
+
+- documenter fidèlement cette implémentation réelle ;
+- compléter le panorama multi-cloud avec une déclinaison distincte de GCP, AWS et Azure.
+
+---
+
+## 18. Signature
+
+**Auteur :** Zidane Djamal  
+**Rôle :** Architecte technique senior
+
+
+
+---
+---

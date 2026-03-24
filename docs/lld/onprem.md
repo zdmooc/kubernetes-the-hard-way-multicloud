@@ -1,26 +1,42 @@
+
+# docs/lld/onprem.md
+
 # Low Level Design (LLD) Provider : On-Premises
 
-**Version :** 1.0.0
-**Auteur :** Zidane Djamal, Architecte technique senior
+**Version :** 1.1.0  
+**Auteur :** Zidane Djamal  
+**Rôle :** Architecte technique senior
 
 ---
 
 ## 1. Présentation du Provider
 
-L'environnement On-Premises (on-prem) représente le déploiement de Kubernetes sur une infrastructure locale, sans dépendance à un fournisseur Cloud public. Ce scénario est pertinent pour les organisations soumises à des contraintes réglementaires strictes (souveraineté des données), pour les environnements déconnectés (air-gapped), ou simplement pour les architectes souhaitant expérimenter sur leur propre matériel.
+L’environnement On-Premises (on-prem) représente le déploiement de Kubernetes sur une infrastructure locale, sans dépendance à un fournisseur Cloud public. Ce scénario est pertinent pour les environnements souverains, les laboratoires locaux, les contextes déconnectés (air-gapped), ou les architectures techniques souhaitant conserver une maîtrise complète de l’infrastructure hôte.
 
-Dans le cadre de ce projet, l'environnement on-prem est simulé via des machines virtuelles locales créées avec un hyperviseur de type 2 (VirtualBox, libvirt/KVM) ou un hyperviseur de type 1 (Proxmox, VMware ESXi). Le provisionnement peut être réalisé via Terraform (avec le provider `libvirt` pour KVM) ou via des scripts shell utilisant directement les outils de l'hyperviseur.
+Dans l’état actuel du dépôt, le provider on-prem ne repose pas sur un module Terraform dédié. Il est modélisé comme un **mode d’exécution local** fondé sur :
+
+- un inventaire local dans `inventories/onprem/` ;
+- des scripts d’assistance dans `scripts/onprem/` ;
+- la conservation de la topologie logique standard (`jumpbox`, `server`, `node-0`, `node-1`) ;
+- un bootstrap Kubernetes réalisé ensuite via `docs/core/` et les scripts mutualisés.
+
+L’overlay on-prem ne crée donc pas automatiquement toute l’infrastructure locale dans le dépôt actuel. Il prépare et structure un environnement local déjà disponible ou créé hors du dépôt.
 
 ---
 
 ## 2. Hypothèses Spécifiques
 
-- L'utilisateur dispose d'un poste de travail ou d'un serveur avec au moins 16 Go de RAM et 4 cœurs CPU pour héberger 4 VMs simultanément.
-- Un hyperviseur est installé et fonctionnel : libvirt/KVM (Linux), VirtualBox (multi-plateforme), ou Proxmox (serveur dédié).
-- L'image ISO Ubuntu 22.04 LTS Server est disponible localement ou une image cloud-init compatible est utilisée.
-- Le réseau local permet la communication entre les VMs (bridge réseau ou réseau NAT avec port forwarding).
-- L'utilisateur a un accès root ou sudo sur la machine hôte.
-- Aucun accès Internet n'est requis depuis les VMs pendant le déploiement si les binaires sont pré-téléchargés (scénario air-gapped possible).
+- L’utilisateur dispose d’un hôte local ou d’une plateforme de virtualisation capable d’exécuter quatre machines nommées `jumpbox`, `server`, `node-0` et `node-1`.
+- Les VMs peuvent être créées hors du dépôt via l’hyperviseur ou l’outillage local retenu.
+- L’utilisateur dispose d’un accès SSH par clé vers ces machines.
+- Le plan d’adressage suit le modèle logique du dépôt :
+  - `10.240.0.10` pour `jumpbox`
+  - `10.240.0.11` pour `server`
+  - `10.240.0.20` pour `node-0`
+  - `10.240.0.21` pour `node-1`
+- L’inventaire `inventories/onprem/inventory.env` est préparé localement à partir de `inventories/onprem/lab.env.example` ou d’un mécanisme équivalent.
+- Si l’environnement local utilise `libvirt/virsh`, le script `scripts/onprem/cleanup.sh` peut détruire les VMs et le réseau virtuel associés.
+- L’utilisateur dispose de privilèges suffisants sur les nœuds pour exécuter les opérations système requises par Kubernetes.
 
 ---
 
@@ -28,100 +44,132 @@ Dans le cadre de ce projet, l'environnement on-prem est simulé via des machines
 
 ### 3.1. Composants Réseau
 
-| Composant | Nom | Description |
-| :--- | :--- | :--- |
-| **Bridge réseau** | `k8s-thw-br0` | Bridge virtuel connectant toutes les VMs |
-| **Réseau virtuel** | `k8s-thw-net` | Réseau libvirt/VirtualBox `10.240.0.0/24` |
-| **DHCP** | Désactivé | Les IPs sont assignées statiquement via cloud-init ou configuration manuelle |
-| **NAT** | Optionnel | NAT pour l'accès Internet sortant depuis les VMs |
+Dans la V1 actuelle du dépôt, l’architecture réseau on-prem est définie surtout comme un **contrat logique** et non comme une création automatique complète.
 
-### 3.2. Plan d'Adressage
+Les éléments visibles ou implicites sont les suivants :
+
+| Composant | Nom / valeur | Description |
+| :--- | :--- | :--- |
+| **Réseau local du cluster** | `10.240.0.0/24` | Réseau des VMs du cluster |
+| **Réseau libvirt potentiel** | `k8s-thw-net` | Nom visible dans le script `cleanup.sh` lorsqu’un environnement `virsh` est utilisé |
+| **Adressage statique** | Oui | Les IP sont supposées stables et connues via l’inventaire |
+| **Accès externe** | Direct depuis l’hôte local | Il n’y a pas de distinction publique/privée au sens cloud |
+
+### 3.2. Plan d’Adressage
 
 | Bloc CIDR | Usage |
 | :--- | :--- |
-| `10.240.0.0/24` | Réseau des VMs |
-| `10.240.0.1` | Passerelle (hôte / bridge) |
+| `10.240.0.0/24` | Réseau local des nœuds |
+| `10.240.0.10` | `jumpbox` |
+| `10.240.0.11` | `server` |
+| `10.240.0.20` | `node-0` |
+| `10.240.0.21` | `node-1` |
 | `10.200.0.0/16` | Pod CIDR global |
 | `10.200.0.0/24` | Pod CIDR node-0 |
 | `10.200.1.0/24` | Pod CIDR node-1 |
 | `10.32.0.0/24` | Service CIDR |
 
-### 3.3. Routes pour le Pod CIDR
+### 3.3. Routage du Pod CIDR
 
-En environnement on-prem, le routage des pods entre workers est géré directement au niveau du système d'exploitation des nœuds. Des routes statiques sont ajoutées sur chaque worker :
+Le routage Pod-to-Pod reste une exigence du socle Kubernetes, mais il n’est pas créé automatiquement par les scripts `scripts/onprem/` actuellement visibles.
 
-**Sur node-0 :**
-```bash
-sudo ip route add 10.200.1.0/24 via 10.240.0.21
-```
+Le LLD on-prem fixe donc la cible logique suivante :
 
-**Sur node-1 :**
-```bash
-sudo ip route add 10.200.0.0/24 via 10.240.0.20
-```
+| Route logique | Destination | Next Hop |
+| :--- | :--- | :--- |
+| route vers pods node-0 | `10.200.0.0/24` | `10.240.0.20` |
+| route vers pods node-1 | `10.200.1.0/24` | `10.240.0.21` |
 
-Ces routes sont également ajoutées sur le nœud `server` pour permettre au control plane de joindre les pods.
+La mise en œuvre exacte dépend du mode de virtualisation retenu et des procédures du socle.
+
+### 3.4. Point d’Attention Réseau
+
+Dans la V1 actuelle, le dépôt ne standardise pas complètement la création du bridge, du NAT ou du DHCP local. Ces choix restent dépendants de l’environnement d’exécution et doivent être assumés comme tels dans le LLD.
 
 ---
 
 ## 4. Architecture Compute
 
-### 4.1. Instances
+### 4.1. Nœuds logiques
 
-| Hostname | vCPU | RAM | Disque | IP Privée | Accès externe |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `jumpbox` | 1 | 1 Go | 10 Go | `10.240.0.10` | SSH depuis l'hôte |
-| `server` | 2 | 4 Go | 40 Go | `10.240.0.11` | SSH via jumpbox |
-| `node-0` | 2 | 4 Go | 40 Go | `10.240.0.20` | SSH via jumpbox |
-| `node-1` | 2 | 4 Go | 40 Go | `10.240.0.21` | SSH via jumpbox |
+Le dépôt standardise avant tout les **noms de nœuds** et les **IP attendues**, pas un dimensionnement automatisé uniforme des VMs on-prem.
 
-**Total requis :** 7 vCPU, 13 Go RAM, 130 Go disque.
+| Hostname | Rôle | IP attendue | Accès |
+| :--- | :--- | :--- | :--- |
+| `jumpbox` | point d’entrée opérateur | `10.240.0.10` | SSH depuis l’hôte |
+| `server` | control plane | `10.240.0.11` | SSH via l’hôte ou la jumpbox |
+| `node-0` | worker | `10.240.0.20` | SSH via l’hôte ou la jumpbox |
+| `node-1` | worker | `10.240.0.21` | SSH via l’hôte ou la jumpbox |
 
-### 4.2. Configuration des VMs
+### 4.2. Ce que le dépôt impose réellement
 
-Chaque VM sera créée avec les paramètres suivants :
+Les éléments réellement visibles dans les scripts on-prem sont les suivants :
 
-- **OS :** Ubuntu 22.04 LTS Server (installation minimale)
-- **Disque :** Format qcow2 (KVM) ou VDI (VirtualBox)
-- **Réseau :** Interface unique sur le bridge `k8s-thw-br0`
-- **Cloud-init :** Utilisé pour l'injection de la clé SSH, la configuration réseau statique, et le hostname
-- **IP forwarding :** Activé au niveau kernel (`net.ipv4.ip_forward=1`) sur tous les nœuds
+- présence logique de `jumpbox`, `server`, `node-0`, `node-1` ;
+- usage d’un accès SSH par clé ;
+- préparation système de `server`, `node-0` et `node-1` via `scripts/onprem/prepare-hosts.sh` ;
+- nettoyage des VMs et du réseau local via `scripts/onprem/cleanup.sh` lorsque `virsh` est disponible.
+
+### 4.3. Ce que le dépôt n’impose pas encore
+
+La V1 actuelle ne fixe pas dans le code :
+
+- un nombre standard de vCPU ;
+- une quantité standard de RAM ;
+- une taille standard de disque ;
+- un mécanisme unique de création des VMs.
+
+Ces paramètres relèvent donc du runbook local ou du lab de l’utilisateur.
 
 ---
 
 ## 5. Sécurité
 
-### 5.1. Filtrage Réseau
+### 5.1. Modèle de sécurité V1
 
-En environnement on-prem, il n'y a pas de Security Groups managés. La sécurité réseau repose sur :
+En environnement on-prem V1, il n’existe pas de Security Group managé comme sur les providers cloud. La sécurité repose principalement sur :
 
-- **iptables / nftables :** Règles de filtrage sur chaque nœud (optionnel en V1, le réseau étant isolé).
-- **Isolation du bridge :** Le bridge virtuel est isolé du réseau physique de l'hôte (sauf si un bridge externe est utilisé).
-- **Pas de pare-feu restrictif en V1 :** Le réseau entre les VMs est considéré comme de confiance (environnement de laboratoire).
+- l’isolation du réseau local du cluster ;
+- l’authentification SSH par clé ;
+- la maîtrise de l’hôte de virtualisation ;
+- les privilèges système sur les nœuds.
 
 ### 5.2. Principes de Sécurité V1
 
-Pour la V1, la sécurité repose uniquement sur l'isolation du réseau virtuel et l'authentification SSH par clé. Il n'y a pas de SELinux/AppArmor configuré, pas de firewall restrictif, et pas de chiffrement du disque.
+Pour la V1, le dépôt ne montre pas de durcissement réseau on-prem automatisé de type :
+
+- firewall local standardisé ;
+- segmentation réseau avancée ;
+- chiffrement disque ;
+- SELinux/AppArmor spécifique au provider.
+
+Le LLD doit donc présenter la sécurité on-prem comme **simple et maîtrisée localement**, sans la survendre.
 
 ---
 
 ## 6. Accès SSH
 
-L'accès SSH est configuré via cloud-init (injection de la clé publique) ou manuellement lors de l'installation de l'OS.
+L’accès SSH on-prem repose sur les variables d’inventaire `SSH_USER` et `SSH_KEY_PATH`.
 
-**Depuis l'hôte :**
-```bash
-ssh -i ~/.ssh/id_ed25519 ubuntu@10.240.0.10  # jumpbox
-```
+### 6.1. Principes
 
-**Depuis la jumpbox :**
-```bash
-ssh ubuntu@10.240.0.11  # server
-ssh ubuntu@10.240.0.20  # node-0
-ssh ubuntu@10.240.0.21  # node-1
-```
+- `inventories/onprem/lab.env.example` fixe aujourd’hui `SSH_USER="ubuntu"` ;
+- la clé privée utilisée côté opérateur est `~/.ssh/id_ed25519` dans l’exemple versionné ;
+- `scripts/onprem/prepare-hosts.sh` utilise explicitement `SSH_USER`, `SSH_KEY_PATH` et les IP privées des nœuds.
 
-**Note :** En environnement on-prem, la `jumpbox` n'est pas strictement nécessaire comme bastion (l'hôte peut accéder directement à toutes les VMs). Elle est conservée pour maintenir la cohérence architecturale avec les déploiements Cloud.
+### 6.2. Rôle de la jumpbox
+
+La `jumpbox` reste conservée dans le modèle on-prem pour rester cohérente avec les autres providers, même si, techniquement, l’hôte local peut souvent joindre directement tous les nœuds.
+
+### 6.3. Portée du script `prepare-hosts.sh`
+
+Le script `scripts/onprem/prepare-hosts.sh` prépare :
+
+- `server`
+- `node-0`
+- `node-1`
+
+Il ne prépare pas `jumpbox`, ce qui est cohérent avec son rôle de machine d’accès et d’orchestration.
 
 ---
 
@@ -129,114 +177,140 @@ ssh ubuntu@10.240.0.21  # node-1
 
 ### 7.1. Adresses IP
 
-Les IP sont assignées statiquement via cloud-init (fichier `network-config`) ou via la configuration Netplan de chaque VM. Il n'y a pas d'IP publique ; l'accès se fait directement via les IP privées du réseau virtuel.
+Dans la convention on-prem du dépôt :
+
+- il n’y a pas de vraie séparation cloud entre IP publique et IP privée ;
+- les variables `*_PUBLIC_IP` et `*_PRIVATE_IP` portent la même valeur dans l’exemple versionné ;
+- `REGION` et `ZONE` valent `local`.
 
 ### 7.2. Résolution DNS
 
-Le fichier `/etc/hosts` de chaque nœud est configuré manuellement ou via cloud-init :
+Le dépôt ne montre pas de mécanisme on-prem automatisé complet de résolution DNS locale. En pratique, la résolution peut reposer sur :
 
-```
-10.240.0.10  jumpbox
-10.240.0.11  server
-10.240.0.20  node-0
-10.240.0.21  node-1
-```
+- `/etc/hosts` ;
+- DNS local du lab ;
+- conventions de l’hyperviseur.
+
+Le LLD ne doit pas présenter une automatisation DNS complète si elle n’est pas visible dans les scripts réels.
 
 ---
 
 ## 8. Variables Attendues
 
-### 8.1. Variables Terraform (`variables.tf`) — Scénario libvirt
+### 8.1. Positionnement V1
 
-| Variable | Type | Valeur par défaut | Description |
-| :--- | :--- | :--- | :--- |
-| `libvirt_uri` | `string` | `qemu:///system` | URI de connexion libvirt |
-| `base_image_path` | `string` | — (obligatoire) | Chemin vers l'image cloud Ubuntu 22.04 |
-| `network_name` | `string` | `k8s-thw-net` | Nom du réseau libvirt |
-| `ssh_public_key_path` | `string` | `~/.ssh/id_ed25519.pub` | Chemin vers la clé publique SSH |
+La V1 on-prem du dépôt ne s’appuie pas sur un `variables.tf` on-prem visible dans le repository. Le contrat d’entrée réellement visible est d’abord l’inventaire local.
 
-### 8.2. Variables pour le Scénario Manuel (VirtualBox)
+### 8.2. Variables d’inventaire attendues
 
-En l'absence de Terraform, les variables sont définies dans un fichier de configuration shell :
+Le fichier `inventories/onprem/lab.env.example` montre les variables attendues :
 
-```bash
-# config.sh
-VM_BRIDGE="k8s-thw-br0"
-VM_CPUS_JUMPBOX=1
-VM_RAM_JUMPBOX=1024
-VM_CPUS_SERVER=2
-VM_RAM_SERVER=4096
-VM_CPUS_WORKER=2
-VM_RAM_WORKER=4096
-VM_DISK_SIZE=40960  # Mo
-ISO_PATH="/path/to/ubuntu-22.04-live-server-amd64.iso"
-SSH_PUBLIC_KEY_PATH="~/.ssh/id_ed25519.pub"
-```
+| Variable | Exemple | Description |
+| :--- | :--- | :--- |
+| `PROVIDER` | `onprem` | Provider logique |
+| `REGION` | `local` | Région logique locale |
+| `ZONE` | `local` | Zone logique locale |
+| `JUMPBOX_PUBLIC_IP` | `10.240.0.10` | IP de la jumpbox |
+| `SERVER_PUBLIC_IP` | `10.240.0.11` | IP du server |
+| `NODE_0_PUBLIC_IP` | `10.240.0.20` | IP de node-0 |
+| `NODE_1_PUBLIC_IP` | `10.240.0.21` | IP de node-1 |
+| `JUMPBOX_PRIVATE_IP` | `10.240.0.10` | IP privée jumpbox |
+| `SERVER_PRIVATE_IP` | `10.240.0.11` | IP privée server |
+| `NODE_0_PRIVATE_IP` | `10.240.0.20` | IP privée node-0 |
+| `NODE_1_PRIVATE_IP` | `10.240.0.21` | IP privée node-1 |
+| `POD_CIDR` | `10.200.0.0/16` | Pod CIDR global |
+| `SERVICE_CIDR` | `10.32.0.0/24` | Service CIDR |
+| `CLUSTER_DNS` | `10.32.0.10` | DNS cluster |
+| `SSH_USER` | `ubuntu` | Utilisateur SSH |
+| `SSH_KEY_PATH` | `~/.ssh/id_ed25519` | Clé privée SSH |
 
----
+### 8.3. `lab.env.example` vs `inventory.env`
 
-## 9. Structure Terraform Prévue
+Le provider on-prem suit la distinction standard du dépôt :
 
-### 9.1. Scénario libvirt/KVM (Terraform)
-
-```text
-terraform/onprem/
-├── main.tf                  # Provider libvirt
-├── variables.tf             # Variables d'entrée
-├── outputs.tf               # Sorties (IPs)
-├── network.tf               # Réseau libvirt, bridge
-├── compute.tf               # Domaines libvirt (VMs)
-├── cloud_init.tf            # Templates cloud-init
-├── templates/
-│   ├── cloud_init.cfg.tpl   # Template cloud-init user-data
-│   ├── network_config.tpl   # Template cloud-init network-config
-│   └── inventory.env.tpl    # Template pour l'inventory
-├── inventory.tf             # Génération du fichier inventory.env
-├── terraform.tfvars.example # Exemple de fichier de variables
-└── README.md                # Instructions spécifiques on-prem
-```
-
-### 9.2. Scénario VirtualBox (Scripts)
-
-Pour les utilisateurs n'utilisant pas libvirt, des scripts shell alternatifs sont fournis :
-
-```text
-scripts/providers/onprem/
-├── 00-validate-prerequisites.sh   # Vérifie VBoxManage ou virsh
-├── 01-create-network.sh           # Crée le réseau virtuel
-├── 02-create-vms.sh               # Crée les 4 VMs
-├── 03-configure-network.sh        # Configure les IPs statiques
-├── 99-cleanup.sh                  # Supprime les VMs et le réseau
-└── README.md                      # Instructions d'utilisation
-```
+- `inventories/onprem/lab.env.example` : exemple versionné ;
+- `inventories/onprem/inventory.env` : fichier d’exécution local, créé ou adapté par l’utilisateur selon son environnement.
 
 ---
 
-## 10. Structure Scripts Prévue
+## 9. Structure Réelle du Provider On-Prem
 
 ```text
-scripts/providers/onprem/
-├── 00-validate-prerequisites.sh   # Vérifie les pré-requis (hyperviseur, RAM, CPU)
-├── 01-provision.sh                # Wrapper Terraform ou création manuelle des VMs
-├── 02-configure-network.sh        # Configuration réseau statique si non cloud-init
-├── 99-cleanup.sh                  # Suppression des VMs et du réseau
-└── README.md                      # Instructions d'utilisation
+docs/providers/onprem/
+└── README.md
+
+inventories/onprem/
+└── lab.env.example
+
+scripts/onprem/
+├── cleanup.sh
+└── prepare-hosts.sh
 ```
+
+### 9.1. Rôle des éléments réels
+
+- `docs/providers/onprem/README.md` : documentation provider ;
+- `inventories/onprem/lab.env.example` : contrat d’inventaire versionné ;
+- `scripts/onprem/prepare-hosts.sh` : préparation système des nœuds ;
+- `scripts/onprem/cleanup.sh` : nettoyage local orienté `virsh` si disponible.
+
+### 9.2. Point d’attention documentaire
+
+Le dépôt réel ne montre pas, à ce stade :
+
+- `terraform/onprem/` ;
+- `network.tf` ;
+- `compute.tf` ;
+- `cloud_init.tf` ;
+- `templates/` ;
+- `inventory.tf` ;
+- `scripts/providers/onprem/`.
+
+Le LLD on-prem doit donc être réaligné sur cette structure réelle et ne pas continuer à décrire un provider Terraform on-prem absent du dépôt.
+
+---
+
+## 10. Structure Scripts Réelle
+
+```text
+scripts/onprem/
+├── cleanup.sh
+└── prepare-hosts.sh
+```
+
+### 10.1. `prepare-hosts.sh`
+
+Ce script :
+
+- exige qu’un inventaire soit déjà sourcé ;
+- prépare `server`, `node-0` et `node-1` ;
+- désactive le swap ;
+- active `net.ipv4.ip_forward=1` ;
+- charge `overlay` et `br_netfilter`.
+
+### 10.2. `cleanup.sh`
+
+Ce script :
+
+- propose une confirmation interactive ;
+- tente un cleanup via `virsh` si `virsh` est disponible ;
+- détruit les domaines `jumpbox`, `server`, `node-0`, `node-1` ;
+- supprime le réseau `k8s-thw-net` ;
+- supprime `inventories/onprem/inventory.env`.
+
+### 10.3. Interprétation
+
+La V1 on-prem actuelle est donc un provider **assisté par scripts**, pas un provider complètement provisionné par le dépôt.
 
 ---
 
 ## 11. Exemple d'Inventory
 
 ```bash
-# === Kubernetes The Hard Way - On-Prem Inventory ===
-# Provider: On-Premises (libvirt/KVM)
-# Host: workstation.local
-
 PROVIDER="onprem"
 REGION="local"
 ZONE="local"
 
-# Pas d'IP publiques en on-prem
 JUMPBOX_PUBLIC_IP="10.240.0.10"
 SERVER_PUBLIC_IP="10.240.0.11"
 NODE_0_PUBLIC_IP="10.240.0.20"
@@ -263,40 +337,68 @@ SSH_USER="ubuntu"
 SSH_KEY_PATH="~/.ssh/id_ed25519"
 ```
 
-**Note :** En on-prem, les variables `*_PUBLIC_IP` et `*_PRIVATE_IP` ont la même valeur car il n'y a pas de distinction entre IP publique et privée.
+En on-prem V1, les variables `*_PUBLIC_IP` et `*_PRIVATE_IP` portent la même valeur dans l’exemple versionné, car il n’y a pas de séparation cloud native entre IP publique et IP privée.
 
 ---
 
 ## 12. Flux d'Exécution
 
-1. **Pré-requis :** Vérifier la disponibilité de l'hyperviseur, les ressources système (RAM, CPU, disque), et la présence de l'image Ubuntu.
-2. **Provisionnement :**
-   - **Scénario Terraform/libvirt :** Se placer dans `terraform/onprem/`, configurer les variables, puis exécuter `terraform apply`.
-   - **Scénario VirtualBox :** Exécuter les scripts `01-create-network.sh` puis `02-create-vms.sh`.
-3. **Vérification de l'inventory :** Vérifier que `inventories/onprem/inventory.env` a été correctement généré.
-4. **Connexion à la Jumpbox :** `ssh -i ~/.ssh/id_ed25519 ubuntu@10.240.0.10`
-5. **Clonage du dépôt sur la Jumpbox :** `git clone https://github.com/zdmooc/kubernetes-the-hard-way-multicloud.git`
-6. **Sourcing de l'inventory :** `source inventories/onprem/inventory.env`
-7. **Exécution séquentielle des scripts Core :** `01-prerequisites.sh` à `11-smoke-tests.sh`
-8. **Collecte des preuves :** Les scripts génèrent automatiquement des fichiers dans `evidence/`.
+Le flux de déploiement on-prem V1 peut être résumé ainsi :
+
+1. **Préparation locale**
+   - disposer des VMs locales ou de l’environnement de virtualisation nécessaire ;
+   - vérifier les accès SSH, les IPs et les ressources de l’hôte.
+
+2. **Préparation de l’inventaire**
+   - créer ou adapter `inventories/onprem/inventory.env` à partir de `inventories/onprem/lab.env.example` ;
+   - sourcer cet inventaire ;
+   - vérifier son contenu via `scripts/shared/render-inventory.sh` si besoin.
+
+3. **Préparation système des nœuds**
+   - exécuter `scripts/onprem/prepare-hosts.sh` pour préparer `server`, `node-0`, `node-1`.
+
+4. **Exécution du socle Kubernetes**
+   - suivre les étapes documentées dans `docs/core/` ;
+   - utiliser les scripts mutualisés de `scripts/shared/` en appui.
+
+5. **Validation**
+   - exécuter les validations décrites dans `docs/core/09-smoke-tests.md` ;
+   - utiliser `scripts/shared/smoke-tests.sh` pour la partie actuellement automatisée.
+
+6. **Conservation des preuves**
+   - stocker les sorties utiles dans `evidence/` selon la discipline opératoire retenue.
+
+### 12.1. Point d’attention
+
+Le flux on-prem ne doit pas être décrit comme une exécution séquentielle d’une suite `01-*` à `11-*` dans `scripts/core/`, ni comme un scénario Terraform on-prem déjà présent dans le dépôt, car ce n’est pas le cas dans l’état actuel du repository.
 
 ---
 
 ## 13. Flux de Cleanup
 
-1. **Nettoyage Kubernetes (optionnel) :** Suppression des ressources Kubernetes de test.
-2. **Destruction de l'infrastructure :**
-   - **Scénario Terraform/libvirt :**
-     ```bash
-     cd terraform/onprem/
-     terraform destroy -auto-approve
-     ```
-   - **Scénario VirtualBox :**
-     ```bash
-     scripts/providers/onprem/99-cleanup.sh
-     ```
+Le nettoyage on-prem repose sur le script réel `scripts/onprem/cleanup.sh`.
 
-**Vérification post-cleanup :** Exécuter `virsh list --all` (libvirt) ou `VBoxManage list vms` (VirtualBox) pour confirmer la suppression.
+### 13.1. Séquence visible
+
+Le script effectue :
+
+1. une confirmation interactive ;
+2. un nettoyage via `virsh` si `virsh` est disponible ;
+3. la destruction des VMs `jumpbox`, `server`, `node-0`, `node-1` ;
+4. la suppression du réseau `k8s-thw-net` ;
+5. la suppression locale de `inventories/onprem/inventory.env`.
+
+### 13.2. Comportement en absence de `virsh`
+
+Si `virsh` n’est pas disponible, le script avertit l’utilisateur et le nettoyage de l’hyperviseur reste manuel.
+
+### 13.3. Vérifications recommandées
+
+Après cleanup, il est recommandé de vérifier :
+
+- l’absence de VMs locales résiduelles ;
+- l’absence du réseau local virtuel concerné ;
+- l’absence d’inventaire local résiduel.
 
 ---
 
@@ -304,34 +406,51 @@ SSH_KEY_PATH="~/.ssh/id_ed25519"
 
 | Risque | Impact | Probabilité | Mitigation |
 | :--- | :--- | :--- | :--- |
-| **Ressources insuffisantes** | VMs lentes ou crash | Moyen | Vérifier les pré-requis (16 Go RAM, 4 CPU) avant le déploiement |
-| **Conflit réseau** | Collision d'adresses IP | Faible | Utiliser un CIDR dédié (`10.240.0.0/24`) non utilisé sur le réseau local |
-| **Hyperviseur incompatible** | Échec du provisionnement | Faible | Tester avec libvirt/KVM (recommandé) ou VirtualBox |
-| **Accès Internet limité** | Impossible de télécharger les binaires | Moyen | Pré-télécharger les binaires sur l'hôte et les copier sur la jumpbox |
+| Ressources insuffisantes | VMs lentes ou instables | Moyen | Vérifier la capacité de l’hôte avant déploiement |
+| Conflit réseau | Collision d’adresses IP | Faible | Utiliser un CIDR dédié non utilisé localement |
+| Hyperviseur incompatible | Échec partiel du lab | Moyen | Tester l’environnement local avant bootstrap |
+| Accès Internet limité | Téléchargements impossibles | Moyen | Pré-télécharger les binaires et images nécessaires |
+| Inventaire incomplet | Blocage du socle | Moyen | Vérifier `inventory.env` avant préparation des nœuds |
 
 ---
 
 ## 15. Points d'Attention
 
-- **Performances :** Les VMs locales partagent les ressources de l'hôte. Les performances seront inférieures à un déploiement Cloud. Il est recommandé de fermer les applications gourmandes en ressources pendant les tests.
-- **IP Forwarding :** Le paramètre kernel `net.ipv4.ip_forward=1` doit être activé sur tous les nœuds. Vérifier avec `sysctl net.ipv4.ip_forward`.
-- **Bridge réseau :** La configuration du bridge varie selon l'hyperviseur et la distribution Linux de l'hôte. Consulter la documentation de l'hyperviseur en cas de problème de connectivité.
-- **Persistance :** Les VMs libvirt/VirtualBox persistent au redémarrage de l'hôte (si configurées en autostart). Les IPs statiques sont conservées.
-- **Scénario Air-Gapped :** Ce provider est le seul à supporter nativement un déploiement sans accès Internet, à condition de pré-télécharger tous les binaires Kubernetes, etcd, containerd, runc, et les plugins CNI.
+- **Performances :** Les performances dépendent directement des ressources de l’hôte local.
+- **IP Forwarding :** `scripts/onprem/prepare-hosts.sh` active `net.ipv4.ip_forward=1` sur `server`, `node-0`, `node-1`.
+- **Modules noyau :** Le script charge `overlay` et `br_netfilter`, indispensables au fonctionnement attendu du socle.
+- **Virtualisation locale :** Le comportement réseau et la stabilité peuvent varier selon `virsh`, VirtualBox, VMware ou autre hyperviseur local.
+- **Air-gapped :** Le mode on-prem reste le plus adapté aux laboratoires déconnectés, sous réserve de préparer les artefacts nécessaires.
 
 ---
 
 ## 16. Limites Connues de la V1
 
-- Pas de haute disponibilité (mono-nœud control plane).
-- Pas de stockage partagé entre les workers (pas de NFS, pas de Ceph).
-- Pas de Load Balancer (accès direct à l'API Server via l'IP du nœud `server`).
-- Performances limitées par les ressources de l'hôte.
-- La configuration réseau (bridge) peut varier significativement selon l'hyperviseur et l'OS de l'hôte.
-- Pas de gestion centralisée des logs ou du monitoring.
-- Le scénario VirtualBox est moins automatisé que le scénario libvirt/Terraform.
+- pas de haute disponibilité control plane ;
+- pas de load balancer externe standardisé ;
+- pas de stockage distribué partagé visible dans le dépôt ;
+- performances dépendantes de l’hôte local ;
+- configuration réseau moins standardisée que sur les providers cloud ;
+- pas de centralisation visible des logs ni du monitoring ;
+- la création initiale des VMs et du réseau local reste hors du périmètre automatisé du dépôt.
 
 ---
-**Signé :**
-*Zidane Djamal*
-*Architecte technique senior*
+
+## 17. Conclusion
+
+Le provider on-prem apporte une valeur forte au dépôt, car il montre comment conserver la même logique d’architecture Kubernetes tout en sortant du paradigme cloud public.
+
+Son rôle dans la V1 actuelle est clair :
+
+- structurer un environnement local cohérent avec le socle commun ;
+- formaliser le contrat d’inventaire ;
+- assister la préparation système et le cleanup ;
+- laisser la création initiale des VMs à l’environnement local de l’utilisateur.
+
+---
+
+## 18. Signature
+
+**Auteur :** Zidane Djamal  
+**Rôle :** Architecte technique senior
+
