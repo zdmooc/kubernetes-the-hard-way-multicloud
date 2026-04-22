@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cat > inventory.env <<'ENVEOF'
+PROVIDER=onprem
+ENVIRONMENT=vagrant
+JUMPBOX_IP=192.168.56.10
+CONTROLLER_0_IP=192.168.56.11
+CONTROLLER_1_IP=192.168.56.12
+CONTROLLER_2_IP=192.168.56.13
+WORKER_0_IP=192.168.56.21
+WORKER_1_IP=192.168.56.22
+API_LB_DNS=kubernetes.local
+API_LB_IP=192.168.56.11
+POD_CIDR=10.200.0.0/16
+SERVICE_CIDR=10.32.0.0/24
+WORKER_0_POD_CIDR=10.200.0.0/24
+WORKER_1_POD_CIDR=10.200.1.0/24
+SSH_USER=vagrant
+ENVEOF
+
+echo "inventory.env généré dans $(pwd)/inventory.env"
