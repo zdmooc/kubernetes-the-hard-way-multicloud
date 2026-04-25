@@ -37,3 +37,10 @@ evidence/*
 # Système d'exploitation
 .DS_Store
 Thumbs.db
+.vagrant/
+*.pem
+*.key
+*.csr
+kthw/
+evidence/
+*.log
