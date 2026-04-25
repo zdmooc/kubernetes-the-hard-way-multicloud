@@ -44,3 +44,5 @@ Thumbs.db
 kthw/
 evidence/
 *.log
+inventory.env
+inventories/*.env
