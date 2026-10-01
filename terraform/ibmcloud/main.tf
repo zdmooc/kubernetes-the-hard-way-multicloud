@@ -226,22 +226,22 @@ resource "ibm_is_vpc_routing_table_route" "route_node_1" {
 # ------------------------------------------------------------------------------
 resource "local_file" "inventory" {
   content = templatefile("${path.module}/inventory.tpl", {
-    provider          = "ibmcloud"
-    region            = var.region
-    zone              = var.zone
-    jumpbox_public_ip = ibm_is_floating_ip.jumpbox_fip.address
-    server_public_ip  = ibm_is_floating_ip.server_fip.address
-    node_0_public_ip  = ibm_is_floating_ip.node_0_fip.address
-    node_1_public_ip  = ibm_is_floating_ip.node_1_fip.address
+    provider           = "ibmcloud"
+    region             = var.region
+    zone               = var.zone
+    jumpbox_public_ip  = ibm_is_floating_ip.jumpbox_fip.address
+    server_public_ip   = ibm_is_floating_ip.server_fip.address
+    node_0_public_ip   = ibm_is_floating_ip.node_0_fip.address
+    node_1_public_ip   = ibm_is_floating_ip.node_1_fip.address
     jumpbox_private_ip = "10.240.0.10"
     server_private_ip  = "10.240.0.11"
     node_0_private_ip  = "10.240.0.20"
     node_1_private_ip  = "10.240.0.21"
-    pod_cidr          = var.pod_cidr
-    service_cidr      = var.service_cidr
-    cluster_dns       = var.cluster_dns
-    ssh_user          = var.ssh_user
-    ssh_key_path      = replace(var.ssh_public_key_path, ".pub", "")
+    pod_cidr           = var.pod_cidr
+    service_cidr       = var.service_cidr
+    cluster_dns        = var.cluster_dns
+    ssh_user           = var.ssh_user
+    ssh_key_path       = replace(var.ssh_public_key_path, ".pub", "")
   })
   filename = "${path.module}/../../inventories/ibmcloud/inventory.env"
 }
