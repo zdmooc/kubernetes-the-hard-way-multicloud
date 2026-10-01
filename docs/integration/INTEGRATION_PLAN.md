@@ -1,145 +1,50 @@
-# Plan d’intégration dans le dépôt `kubernetes-the-hard-way-multicloud`
+# Plan d’intégration O7 — Kubernetes The Hard Way Multicloud
 
-## 1. Positionnement des fichiers déjà produits
+## Décision actuelle
 
-### A. Concepts Kubernetes
-Fichier source utilisateur : `kubernetes_concepts_v3_enrichi.md`
+Ce dépôt ne doit plus intégrer ni maintenir une seconde copie du core Kubernetes.
 
-**Destination recommandée dans le dépôt :**
-- `docs/reference/kubernetes-concepts-v3-enrichi.md`
+Source canonique des internals Kubernetes :
 
-**Pourquoi :**
-- c’est un document de référence transverse
-- il ne dépend pas d’un provider
-- il sert de socle théorique avant les guides d’exécution
+`zdmooc/kubernetes-the-hard-way-vagrant-architect-v29`
 
----
+Le présent dépôt reste spécialisé sur les adapters d’infrastructure et la portabilité provider.
 
-### B. Guide générique Hard Way – architecture / runbook
-Fichier source utilisateur : `kubernetes_the_hard_way_guide_generique_architecte_a→z.md`
+## OWNED ici
 
-**Destination recommandée :**
-- `docs/core/kubernetes-the-hard-way-guide-generique-architecte-a-z.md`
+- `terraform/aws/`
+- `terraform/azure/`
+- `terraform/gcp/`
+- `terraform/ibmcloud/`
+- inventories par provider
+- scripts de provision/cleanup propres aux providers
+- HLD/LLD et comparaisons de portabilité
 
-**Pourquoi :**
-- ce document appartient au socle `core`
-- il décrit la logique d’installation manuelle indépendante du provider
+## LEGACY_REFERENCE
 
----
+- `docs/core/`
+- `docs/onprem-vagrant/rebuild-kit/`
 
-### C. Guide commandes / exécution brute
-Fichier source utilisateur : `kubernetes_the_hard_way_guide_generique_architecte_a→z-coomandes.md`
+Ces répertoires restent temporairement présents pour préserver les références historiques, mais ne doivent plus recevoir de nouveau développement du core Kubernetes.
 
-**Destination recommandée :**
-- `docs/core/kubernetes-the-hard-way-commandes-a-z.md`
+Le document dupliqué `docs/reference/kubernetes-concepts-v3-enrichi.md` a été retiré lors d’O7 ; sa copie canonique reste dans le dépôt Vagrant.
 
-**Pourquoi :**
-- complète le guide précédent
-- sert de runbook opératoire
-
----
-
-### D. V6 spécialisation cloud & on-prem
-Fichier source utilisateur : `kubernetes_v_6_specialisation_cloud_on_prem_a_partir_du_hard_way.md`
-
-**Destination recommandée :**
-- `docs/architecture/kubernetes-v6-specialisation-cloud-on-prem.md`
-
-**Pourquoi :**
-- c’est une couche d’architecture / mapping multi-environnement
-- ce n’est ni du core d’installation ni un provider spécifique
-
----
-
-## 2. Arborescence cible recommandée
+## Flux cible
 
 ```text
-kubernetes-the-hard-way-multicloud/
-├── docs/
-│   ├── adr/
-│   ├── architecture/
-│   │   └── kubernetes-v6-specialisation-cloud-on-prem.md
-│   ├── core/
-│   │   ├── kubernetes-the-hard-way-guide-generique-architecte-a-z.md
-│   │   └── kubernetes-the-hard-way-commandes-a-z.md
-│   └── reference/
-│       └── kubernetes-concepts-v3-enrichi.md
-├── inventories/
-│   └── onprem-vagrant.env.example
-├── platforms/
-│   └── onprem/
-│       └── vagrant/
-│           ├── Vagrantfile
-│           ├── README.md
-│           └── inventory.env.example
-├── scripts/
-│   └── onprem/
-│       ├── prepare-hosts.sh
-│       ├── generate-inventory.sh
-│       └── collect-evidence.sh
-└── evidence/
-    └── onprem/
+KTHW Vagrant
+  PKI / etcd / control plane / workers / CNI / DNS / RBAC / systemd
+            ^
+            |
+            | consumes
+            |
+KTHW Multicloud
+  AWS / Azure / GCP / IBM Cloud adapters
+  Terraform / networking / compute / inventories
 ```
 
----
+Pour industrialiser le lifecycle cluster, utiliser `k8s-openshift-cluster-factory` et non ce dépôt.
 
-## 3. Stratégie Git recommandée
+## Règle de preuve
 
-### Branche
-Créer une branche dédiée :
-```bash
-git checkout -b feature/onprem-vagrant-foundation
-```
-
-### Commits recommandés
-1. `docs: add core/reference/cloud documents produced from hard way work`
-2. `feat(onprem): add vagrant foundation for local on-prem lab`
-3. `feat(onprem): add inventory and helper scripts`
-4. `docs(onprem): add readme and execution flow`
-
----
-
-## 4. Ce qu’il faut faire ensuite dans le dépôt
-
-### Priorité 1
-Intégrer les 4 documents comme base documentaire du repo.
-
-### Priorité 2
-Créer le provider/lab On-Prem Vagrant comme environnement local d’apprentissage.
-
-### Priorité 3
-Faire produire à Vagrant un `inventory.env` compatible avec les futurs scripts `core`.
-
-### Priorité 4
-Ensuite seulement écrire `scripts/core/` en s’appuyant sur cet inventaire.
-
----
-
-## 5. Décision d’architecture recommandée pour l’On-Prem local
-
-Pour un vrai labo local simple et portable :
-- **Vagrant + VirtualBox** en priorité
-- ou **libvirt** si environnement Linux natif
-
-### Pourquoi Vagrant d’abord
-- simple à lancer sur poste Windows/Linux/macOS
-- reproductible
-- bon compromis pour un labo pédagogique
-- proche d’un “on-prem simulé” sans dépendre d’un cloud public
-
-### Topologie locale recommandée
-- `jumpbox` : 192.168.56.10
-- `controller-0` : 192.168.56.11
-- `controller-1` : 192.168.56.12
-- `controller-2` : 192.168.56.13
-- `worker-0` : 192.168.56.21
-- `worker-1` : 192.168.56.22
-
----
-
-## 6. Règle importante
-Ne pas commencer par tout automatiser. Il faut d’abord :
-1. stabiliser l’environnement Vagrant
-2. générer un inventaire fiable
-3. vérifier SSH, IP, résolution, swap off, forwarding
-4. seulement après brancher les scripts `core`
+Un `terraform validate` ou un manifest présent ne prouve pas un `terraform apply`, un cluster fonctionnel, une HA réelle ou une exécution de production.
