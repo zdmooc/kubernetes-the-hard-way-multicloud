@@ -24,11 +24,11 @@ resource "ibm_is_public_gateway" "k8s_pgw" {
 }
 
 resource "ibm_is_subnet" "k8s_subnet" {
-  name                     = "k8s-thw-subnet"
-  vpc                      = ibm_is_vpc.k8s_vpc.id
-  zone                     = var.zone
-  ipv4_cidr_block          = "10.240.0.0/24"
-  public_gateway           = ibm_is_public_gateway.k8s_pgw.id
+  name            = "k8s-thw-subnet"
+  vpc             = ibm_is_vpc.k8s_vpc.id
+  zone            = var.zone
+  ipv4_cidr_block = "10.240.0.0/24"
+  public_gateway  = ibm_is_public_gateway.k8s_pgw.id
 }
 
 # ------------------------------------------------------------------------------
