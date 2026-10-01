@@ -58,3 +58,13 @@ variable "cluster_dns" {
   type        = string
   default     = "10.32.0.10"
 }
+
+variable "admin_cidr" {
+  description = "CIDR administrateur autorisé pour SSH et API Kubernetes (ex: 203.0.113.10/32)"
+  type        = string
+
+  validation {
+    condition     = can(cidrhost(var.admin_cidr, 0)) && var.admin_cidr != "0.0.0.0/0"
+    error_message = "admin_cidr doit être un CIDR valide et ne peut pas être 0.0.0.0/0."
+  }
+}
