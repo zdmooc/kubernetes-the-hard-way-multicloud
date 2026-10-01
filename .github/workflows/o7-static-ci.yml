@@ -23,7 +23,7 @@ jobs:
           find scripts -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
 
       - name: Terraform format
-        run: terraform fmt -check -recursive terraform
+        run: terraform fmt -diff -check -recursive terraform
 
       - name: Terraform validate AWS
         run: |
