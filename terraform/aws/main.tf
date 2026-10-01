@@ -241,22 +241,22 @@ resource "aws_route" "route_node_1" {
 # ------------------------------------------------------------------------------
 resource "local_file" "inventory" {
   content = templatefile("${path.module}/inventory.tpl", {
-    provider          = "aws"
-    region            = var.aws_region
-    zone              = var.aws_az
-    jumpbox_public_ip = aws_instance.jumpbox.public_ip
-    server_public_ip  = aws_instance.server.public_ip
-    node_0_public_ip  = aws_instance.node_0.public_ip
-    node_1_public_ip  = aws_instance.node_1.public_ip
+    provider           = "aws"
+    region             = var.aws_region
+    zone               = var.aws_az
+    jumpbox_public_ip  = aws_instance.jumpbox.public_ip
+    server_public_ip   = aws_instance.server.public_ip
+    node_0_public_ip   = aws_instance.node_0.public_ip
+    node_1_public_ip   = aws_instance.node_1.public_ip
     jumpbox_private_ip = aws_instance.jumpbox.private_ip
     server_private_ip  = aws_instance.server.private_ip
     node_0_private_ip  = aws_instance.node_0.private_ip
     node_1_private_ip  = aws_instance.node_1.private_ip
-    pod_cidr          = var.pod_cidr
-    service_cidr      = var.service_cidr
-    cluster_dns       = var.cluster_dns
-    ssh_user          = var.ssh_user
-    ssh_key_path      = replace(var.ssh_public_key_path, ".pub", "")
+    pod_cidr           = var.pod_cidr
+    service_cidr       = var.service_cidr
+    cluster_dns        = var.cluster_dns
+    ssh_user           = var.ssh_user
+    ssh_key_path       = replace(var.ssh_public_key_path, ".pub", "")
   })
   filename = "${path.module}/../../inventories/aws/inventory.env"
 }
