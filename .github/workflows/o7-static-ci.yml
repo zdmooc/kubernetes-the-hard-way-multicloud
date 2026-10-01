@@ -1,0 +1,75 @@
+name: KTHW Multicloud Static CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.14.4"
+
+      - name: Shell syntax
+        run: |
+          find scripts -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+
+      - name: Terraform format
+        run: terraform fmt -check -recursive terraform
+
+      - name: Terraform validate AWS
+        run: |
+          terraform -chdir=terraform/aws init -backend=false -input=false
+          terraform -chdir=terraform/aws validate
+
+      - name: Terraform validate Azure
+        run: |
+          terraform -chdir=terraform/azure init -backend=false -input=false
+          terraform -chdir=terraform/azure validate
+
+      - name: Terraform validate GCP
+        run: |
+          terraform -chdir=terraform/gcp init -backend=false -input=false
+          terraform -chdir=terraform/gcp validate
+
+      - name: Terraform validate IBM Cloud
+        run: |
+          terraform -chdir=terraform/ibmcloud init -backend=false -input=false
+          terraform -chdir=terraform/ibmcloud validate
+
+      - name: Security guard
+        run: |
+          python3 - <<'PY'
+          import pathlib, re, sys
+          bad = []
+          marker = re.compile(r'BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY')
+          for p in pathlib.Path('.').rglob('*'):
+              if '.git' in p.parts or not p.is_file():
+                  continue
+              try:
+                  text = p.read_text(encoding='utf-8')
+              except UnicodeDecodeError:
+                  continue
+              if marker.search(text):
+                  bad.append(f'{p}: private key material')
+          if bad:
+              print('\n'.join(bad))
+              sys.exit(1)
+          print('KTHW_MULTICLOUD_SECRET_GUARD=PASS')
+          PY
+
+      - name: Ownership and truth guards
+        run: |
+          grep -q 'PROVIDER PORTABILITY / TERRAFORM ADAPTER SPECIALIST' README.md
+          grep -q 'terraform plan/apply AWS              = NOT_PROVEN' README.md
+          ! grep -q 'componentstatuses' scripts/shared/smoke-tests.sh
+          test ! -f docs/reference/kubernetes-concepts-v3-enrichi.md
+          echo "KTHW_MULTICLOUD_TRUTH_BOUNDARY=PASS"
