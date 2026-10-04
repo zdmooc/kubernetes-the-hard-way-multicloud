@@ -36,6 +36,7 @@ terraform plan/apply AWS              = NOT_PROVEN
 terraform plan/apply Azure            = NOT_PROVEN
 terraform plan/apply GCP              = NOT_PROVEN
 terraform plan/apply IBM Cloud        = NOT_PROVEN
+terraform on-prem/libvirt design       = DESIGN_READY / NOT_IMPLEMENTED
 Kubernetes runtime on cloud providers = NOT_PROVEN
 Production                            = NOT_CLAIMED
 ```
@@ -58,3 +59,13 @@ Voir :
 - `evidence/README.md`
 
 Aucun provider cloud n'est annoncé comme exécuté tant qu'un run réel n'a pas été observé.
+
+
+## D-095 Infrastructure convergence
+
+For the Architecte Solutions Infrastructure track:
+- public-cloud Terraform adapters remain reference/static assets;
+- on-prem currently remains script-assisted;
+- `terraform/onprem/README.md` defines the future libvirt/KVM implementation gate;
+- no VMware/OpenStack/Nutanix runtime is claimed;
+- Cluster Factory remains the industrial lifecycle owner.
