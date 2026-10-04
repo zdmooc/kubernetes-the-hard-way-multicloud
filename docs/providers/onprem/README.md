@@ -1,60 +1,98 @@
 # Provider Overlay : On-Premises
 
-**Auteur :** Zidane Djamal
+**Auteur :** Zidane Djamal  
+**D-095 status:** REFERENCE / SCRIPT-ASSISTED / TERRAFORM ON-PREM NOT IMPLEMENTED / RUNTIME NOT PROVEN
 
-## Le rôle de l'overlay
-L'overlay On-Premises simule un environnement de centre de données local ou de serveur bare-metal. Son rôle est de provisionner des machines virtuelles locales (via un hyperviseur) qui hébergeront le cluster Kubernetes, sans dépendance à un fournisseur Cloud public. Cet environnement est idéal pour les expérimentations "air-gapped" ou pour éviter les coûts d'infrastructure Cloud.
+## Rôle
 
-## Ce qui change pour ce provider
-Contrairement aux providers Cloud qui gèrent le réseau de manière logicielle (SDN), l'environnement On-Premises repose sur la configuration réseau du système d'exploitation hôte et de l'hyperviseur (bridge réseau, NAT). De plus, il n'y a pas de distinction entre IP publique et IP privée : les machines sont accédées directement via leurs adresses IP sur le réseau virtuel local.
+L'overlay on-prem représente un environnement local ou de Cloud privé **sans imposer un fournisseur**. Dans l'état courant du dépôt, il sert de contrat pédagogique autour de quatre nœuds logiques (`jumpbox`, `server`, `node-0`, `node-1`) et d'un inventaire commun.
 
-Le routage du Pod CIDR entre les workers doit être géré manuellement en ajoutant des routes statiques dans la table de routage du système d'exploitation de chaque nœud.
+Le provisioning/lifecycle industriel des clusters reste la responsabilité de `k8s-openshift-cluster-factory`.
 
-## Prérequis spécifiques
-- Une machine hôte (Linux, macOS ou Windows) avec au moins 16 Go de RAM et 4 cœurs CPU disponibles.
-- Un hyperviseur installé :
-  - **Scénario A (Recommandé) :** Linux avec `libvirt` / KVM.
-  - **Scénario B :** VirtualBox (multi-plateforme).
-- L'image ISO d'Ubuntu 22.04 LTS Server (pour VirtualBox) ou une image Cloud (qcow2) pour libvirt.
-- Terraform (si utilisation de libvirt avec le provider `dmacvicar/libvirt`).
+## État réel du dépôt
 
-## Ordre de lecture recommandé
-1. `docs/lld/onprem.md` (Low Level Design) : Pour comprendre l'architecture réseau et compute locale.
-2. Ce `README.md` : Pour comprendre l'utilisation de l'overlay.
-3. Les fichiers Terraform dans `terraform/onprem/` ou les scripts dans `scripts/providers/onprem/`.
+Présent aujourd'hui :
+- `inventories/onprem/lab.env.example`;
+- `scripts/onprem/prepare-hosts.sh`;
+- `scripts/onprem/cleanup.sh`;
+- `docs/lld/onprem.md`;
+- un patrimoine Vagrant séparé dans `kubernetes-the-hard-way-vagrant-architect-v29`.
 
-## Fichiers concernés
-**Si utilisation de libvirt (Terraform) :**
-- `terraform/onprem/main.tf` : Configuration du provider `libvirt`.
-- `terraform/onprem/network.tf` : Création du réseau virtuel.
-- `terraform/onprem/compute.tf` : Création des domaines (VMs).
-- `terraform/onprem/cloud_init.tf` : Configuration de l'injection SSH et IP statiques.
+Absent aujourd'hui :
+- implémentation Terraform `terraform/onprem/*.tf`;
+- preuve `terraform plan/apply/destroy` sur libvirt/KVM;
+- runtime VMware/vSphere, OpenStack ou Nutanix.
 
-**Si utilisation de VirtualBox (Scripts) :**
-- `scripts/providers/onprem/01-create-network.sh`
-- `scripts/providers/onprem/02-create-vms.sh`
+Toute ancienne description indiquant que `terraform/onprem/main.tf`, `network.tf`, `compute.tf` ou `cloud_init.tf` existaient déjà doit être considérée comme corrigée par ce document.
 
-## Logique d'exécution (Scénario libvirt/Terraform)
-1. Télécharger l'image Cloud Ubuntu 22.04 (`jammy-server-cloudimg-amd64.img`).
-2. Se positionner dans le répertoire `terraform/onprem/`.
-3. Copier le fichier d'exemple : `cp terraform.tfvars.example terraform.tfvars`.
-4. Éditer `terraform.tfvars` pour indiquer le chemin local vers l'image téléchargée (`base_image_path`).
-5. Initialiser Terraform : `terraform init`.
-6. Appliquer la configuration : `terraform apply -auto-approve`.
-7. Vérifier que le fichier `inventories/onprem/inventory.env` a bien été généré.
+## Scénarios
 
-## Variables clés (libvirt)
-- `libvirt_uri` : L'URI de connexion à l'hyperviseur (par défaut `qemu:///system`).
-- `base_image_path` : Le chemin absolu vers l'image qcow2 Ubuntu.
-- `ssh_public_key_path` : Le chemin vers votre clé publique SSH.
-- `network_name` : Le nom du réseau libvirt (par défaut `k8s-thw-net`).
+### Scénario A — actuel / portable
 
-## Points de vigilance
-- **Ressources matérielles :** Assurez-vous que votre machine hôte dispose d'assez de RAM. Le lancement de 4 VMs simultanées peut saturer un poste de travail modeste.
-- **Routage kernel :** Le paramètre `net.ipv4.ip_forward=1` doit être activé sur toutes les VMs pour permettre le routage des paquets CNI.
-- **Connectivité réseau :** La configuration du bridge réseau peut varier selon votre distribution Linux hôte. Si les VMs n'ont pas accès à Internet (pour télécharger les binaires Kubernetes), vérifiez les règles iptables/nftables de votre hôte.
+VMs préparées hors du dépôt -> inventaire -> `prepare-hosts.sh` -> core pédagogique.
 
-## Limites de l'overlay (V1)
-- Les performances sont limitées par le matériel de la machine hôte (notamment les IOPS du disque, critiques pour etcd).
-- La configuration réseau est moins standardisée que sur le Cloud et dépend fortement de l'environnement local de l'utilisateur.
-- Pas de Load Balancer externe disponible nativement.
+### Scénario B — D-095 cible future
+
+Sur un hôte Linux compatible KVM/libvirt :
+
+```text
+Terraform
+-> libvirt network/storage/VM
+-> inventory
+-> Linux preparation
+-> Kubernetes core
+-> evidence
+-> terraform destroy
+```
+
+Le provider Terraform libvirt moderne est `dmacvicar/libvirt`. D-095 a vérifié la branche 0.9.x actuelle ; l'implémentation devra être validée contre la documentation officielle au moment du code.
+
+## Pourquoi KVM/libvirt comme cible de lab
+
+- accessible sans licence de Cloud privé propriétaire ;
+- expose les concepts VM/network/storage ;
+- permet de démontrer Terraform + virtualisation sur un hôte Linux ;
+- ne crée aucun faux claim VMware/OpenStack/Nutanix.
+
+## Environnement Windows / VirtualBox
+
+VirtualBox/Vagrant reste un chemin valide pour démontrer :
+- VM lifecycle local ;
+- réseau privé ;
+- Linux ;
+- Ansible ;
+- Kubernetes internals.
+
+Il ne doit pas être présenté comme une preuve de Cloud privé d'entreprise.
+
+## Contrat d'inventaire
+
+Le fichier cible reste :
+`inventories/onprem/inventory.env`
+
+avec notamment :
+- PROVIDER/REGION/ZONE ;
+- IP jumpbox/server/node-0/node-1 ;
+- Pod/Service CIDR ;
+- SSH user/key.
+
+## D-095 backlog
+
+1. INFRA-2 : rejouer le lab Vagrant/Linux/Ansible dans le dépôt spécialiste.
+2. INFRA-3 : implémenter `terraform/onprem/` uniquement sur un environnement Linux/libvirt compatible.
+3. Capturer `fmt/init/validate/plan/apply/verify/destroy`.
+4. Promouvoir le niveau de preuve seulement après observation.
+
+## Truth boundary
+
+```text
+documentation = REFERENCE
+scripts present = IMPLEMENTED
+terraform/onprem = NOT_IMPLEMENTED
+Vagrant replay = PENDING
+KVM/libvirt apply = NOT_PROVEN
+VMware/OpenStack/Nutanix = REFERENCE_ONLY
+production private cloud = NOT_CLAIMED
+```
+
+Voir également `docs/lld/onprem.md` et `terraform/onprem/README.md`.
